@@ -4,6 +4,8 @@
 
 #include <mxnet/base.h>
 
+#define TILE_WIDTH 16
+
 namespace mxnet
 {
 namespace op
@@ -44,26 +46,30 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
    For ECE408, we only expect the float version of the operator to be called, so here we specialize with only floats.
 */
 template <>
-void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tensor<gpu, 4, float> &x, const mshadow::Tensor<gpu, 4, float> &w)
-{
-
+void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tensor<gpu, 4, float> &x, const mshadow::Tensor<gpu, 4, float> &w) {
     // Use mxnet's CHECK_EQ to do assertions.
     // Remove this assertion when you do your implementation!
-    CHECK_EQ(0, 1) << "Remove this line and replace with your implementation";
+    //CHECK_EQ(0, 1) << "Remove this line and replace with your implementation";
 
     // Extract the tensor dimensions into B,M,C,H,W,K
-    // ...
+    const int B = x.shape_[0];
+    const int M = y.shape_[1];
+    const int C = x.shape_[1];
+    const int H = x.shape_[2];
+    const int W = x.shape_[3];
+    const int K = w.shape_[3];
 
     // Set the kernel dimensions
-    // dim3 gridDim(0);
-    // dim3 blockDim(0);
+    int blocksY = ceil(1.0*M/TILE_WIDTH);
+    int blocksX = ceil(1.0*(H-K+1)*(W-K+1)/TILE_WIDTH);
+    dim3 gridDim (blocksX, blocksY, B);
+    dim3 blockDim (TILE_WIDTH, TILE_WIDTH, 1);
 
     // Call the kernel
-    // forward_kernel<<<gridDim, blockDim, 0, s>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
+    forward_kernel<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
 
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
-
 }
 
 /* 
