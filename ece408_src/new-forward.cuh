@@ -23,8 +23,6 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
 
     const int H_out = H - K + 1;
     const int W_out = W - K + 1;
-    (void)H_out; // silence declared but never referenced warning. remove this line when you start working
-    (void)W_out; // silence declared but never referenced warning. remove this line when you start working
 
 // An example use of these macros:
 // float a = y4d(0,0,0,0)
@@ -33,7 +31,43 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
 #define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
 #define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 
-    
+    int n, m, h0, w0, h_base, w_base, h, w;
+	int X_tile_width = TILE_WIDTH + K - 1;
+	extern __shared__ float shmem[];
+	float* X_shared = &shmem[0];
+	float* W_shared = &shmem[X_tile_width * X_tile_width];
+	n = blockIdx.x;
+	m = blockIdx.y;
+	h0 = threadIdx.x;
+	w0 = threadIdx.y;
+	// h_base = (blockIdx.z / W_grid) * TILE_WIDTH * TILE_WIDTH;
+	// w_base = (blockIdx.z % W_grid) * TILE_WIDTH * TILE_WIDTH;
+	// h = h_base + h0;
+	// w = w_base + w0;
+
+    // float acc = 0;s
+    // for (int c = 0; c < C; c++) {
+    //     if ((h0 < K) && (w0 < K)) {
+    //         W_shared[h0, w0] = k4d(m, c, h, w);
+    //     }
+    //     __syncthreads();
+
+
+    //     for (int i = h; i < h_base + X_tile_width; i+= TILE_WIDTH) {
+    //         for (int j = w; j < w_base + X_tile_width; j += TILE_WIDTH) {
+    //             X_shared[i - h_base, j - w_base] = x4d(n, c, h, w);
+    //         }
+    //     }
+
+    //     __syncthreads();
+    //     for (int p = 0; p < K; p++) {
+    //         for (int q = 0; q < K; q++) {
+    //             acc += X_shared[h + p, w + q] * W_shared[p, q]
+    //         }
+    //     }
+    //     __syncthreads();
+    // }
+    // y4d(n, m, h, w) = acc;
 
 #undef y4d
 #undef x4d
