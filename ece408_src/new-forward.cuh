@@ -16,7 +16,7 @@ namespace op
 __constant__ float Mask [MASK_WIDTH];
 
 
-__global__ void forward_kernel(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K) {
+__global__ void forward_kernel(float * __restrict__ y, const float * __restrict__ x, const float * __restrict__ k, const int B, const int M, const int C, const int H, const int W, const int K) {
 
     /*
     Modify this function to implement the forward pass described in Chapter 16.
@@ -63,7 +63,15 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
         }
         __syncthreads();
         for (p = 0; p < K; p++) {
-            for (q = 0; q < K; q++) {
+            #pragma unroll 25
+            for (q = 0; q < (K - (K % 5)); q += 5) {
+                acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q] * k4d(m, c, p, q);
+                acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 1] * k4d(m, c, p, q + 1);
+                acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 2] * k4d(m, c, p, q + 2);
+                acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 3] * k4d(m, c, p, q + 3);
+                acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 4] * k4d(m, c, p, q + 4);
+            }
+            for (q = (K - (K % 5)); q < K; q += 5) {
                 acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q] * k4d(m, c, p, q);
             }
         }
