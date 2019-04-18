@@ -12,7 +12,8 @@ namespace op
 
 #define TILE_SIZE 16
 #define KERNEL_SIZE 5
-__constant__ float Mask [KERNEL_SIZE * KERNEL_SIZE * 500]; // 50 max number of channels
+#define MASK_WIDTH 24 * 12 * 7 * 7
+__constant__ float Mask [MASK_WIDTH];
 
 
 __global__ void forward_kernel(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K) {
@@ -47,10 +48,13 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
     w = (blockIdx.z % W_grid) * TILE_SIZE + threadIdx.y;
     
     float acc = 0.0;
+    bool stopLoop = false;
     for (c = 0; c < C; c++) {
         __syncthreads();
         for (int i = h; i < h + tile_width - threadIdx.x; i += TILE_SIZE) {
+            if (stopLoop) { break; }
             for (int j = w; j < w + tile_width - threadIdx.y; j += TILE_SIZE) {
+                if (i == H) { stopLoop = true; break; }
                 if (j == W) { break; }
                 if (i < H && j < W) {
                     X_shared[(i - h + threadIdx.x) * tile_width + j - w + threadIdx.y] = x4d(n, c, i, j);
@@ -60,7 +64,7 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
         __syncthreads();
         for (p = 0; p < K; p++) {
             for (q = 0; q < K; q++) {
-            acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q] * k4d(m, c, p, q);
+                acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q] * k4d(m, c, p, q);
             }
         }
     }
