@@ -110,7 +110,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     
 
     cudaMemcpyToSymbol(Mask, w.dptr_, KERNEL_SIZE * KERNEL_SIZE * M * C * sizeof(float), 0, cudaMemcpyDeviceToDevice);
-    size_t shmem_size = ((TILE_SIZE + K-1) * (TILE_SIZE + K-1) + K*K) * sizeof(float);
+    size_t shmem_size = ((TILE_SIZE + K-1) * (TILE_SIZE + K-1)) * sizeof(float);
 
 
     const int Z = ceil((1.0 * W_out) / TILE_SIZE) * ceil((1.0* H_out)/ TILE_SIZE);
