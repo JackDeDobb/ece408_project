@@ -13,10 +13,12 @@ namespace op
 #define TILE_SIZE 16
 #define KERNEL_SIZE 5
 #define MASK_WIDTH 24 * 12 * 7 * 7
+#define RBLOCK_SIZE 128
+
 __constant__ float Mask [MASK_WIDTH];
 
 
-__global__ void forward_kernel(float * __restrict__ y, const float * __restrict__ x, const float * __restrict__ k, const int B, const int M, const int C, const int H, const int W, const int K) {
+__global__ void forward_kernel(float * __restrict__ out, float * __restrict__ y, const float * __restrict__ x, const float * __restrict__ k, const int B, const int M, const int C, const int H, const int W, const int K) {
 
     /*
     Modify this function to implement the forward pass described in Chapter 16.
@@ -48,7 +50,6 @@ __global__ void forward_kernel(float * __restrict__ y, const float * __restrict_
     h = (blockIdx.z / W_grid) * TILE_SIZE + threadIdx.x;
     w = (blockIdx.z % W_grid) * TILE_SIZE + threadIdx.y;
     
-    float acc = 0.0;
     bool stopLoop = false;
     for (c = 0; c < C; c++) {
         __syncthreads();
@@ -66,24 +67,22 @@ __global__ void forward_kernel(float * __restrict__ y, const float * __restrict_
         for (p = 0; p < K; p++) {
             #pragma unroll 25
             for (q = 0; q < (K - (K % 5)); q += 5) {
-                acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q] * k4d(m, c, p, q);
-                acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 1] * k4d(m, c, p, q + 1);
-                acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 2] * k4d(m, c, p, q + 2);
-                acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 3] * k4d(m, c, p, q + 3);
-                acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 4] * k4d(m, c, p, q + 4);
+                o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q] * k4d(m, c, p, q);
+                o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 1] * k4d(m, c, p, q + 1);
+                o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 2] * k4d(m, c, p, q + 2);
+                o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 3] * k4d(m, c, p, q + 3);
+                o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 4] * k4d(m, c, p, q + 4);
             }
             for (q = (K - (K % 5)); q < K; q += 5) {
-                acc = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q] * k4d(m, c, p, q);
+                o4d(c, p, q) = = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q] * k4d(m, c, p, q);
             }
         }
-    }
-    if (h < H_out && w < W_out) {
-      y4d(n, m, h, w) = acc; 
     }
 
     #undef y4d
     #undef x4d
     #undef k4d
+    #undef o4d
 }
 
 /* 
@@ -109,7 +108,12 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     const int H_out = H - K + 1;
     const int W_out = W - K + 1;
     
-    float* 
+	/* For Reduction */    
+    float* sumArray; 
+    int sumSize = C*K*K * sizeof(float);
+    cudaMalloc(&sumArray, sumSize);
+	
+	/* For Constant Mem */
     cudaMemcpyToSymbol(Mask, w.dptr_, KERNEL_SIZE * KERNEL_SIZE * M * C * sizeof(float), 0, cudaMemcpyDeviceToDevice);
     size_t shmem_size = ((TILE_SIZE + K-1) * (TILE_SIZE + K-1)) * sizeof(float);
 
@@ -120,11 +124,11 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     dim3 blockDim(TILE_SIZE, TILE_SIZE, 1);
 
     //Call the kernel
-    forward_kernel<<<gridDim, blockDim, shmem_size>>>(y.dptr_, x.dptr_, w.dptr_, B, M, C, H, W, K);
+    forward_kernel<<<gridDim, blockDim, shmem_size>>>(sumArray, x.dptr_, w.dptr_, B, M, C, H, W, K);
 
     dim3 rgridDim(ceil((1.0)*C*K*K/RBLOCK_SIZE), 1, 1);
     dim3 rblockDim(RBLOCK_SIZE, 1, 1);
-
+    reduction_kernel<<<gridDim, blockDim, shmem_size>>>(
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 }
