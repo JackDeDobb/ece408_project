@@ -49,7 +49,7 @@ __global__ void matrixMultiplyShared(float *A, float *B, float *C, int b,
     for (int k=0;k<TILE_WIDTH;k++){
       pv += TileM[ty][k]*TileN[k][tx];
     }
-   __syncthreads();
+   //__syncthreads();
 
   }
 
