@@ -18,7 +18,7 @@ namespace op
 __constant__ float Mask [MASK_WIDTH];
 
 
-__global__ void forward_kernel(float * __restrict__ out, float * __restrict__ y, const float * __restrict__ x, const float * __restrict__ k, const int B, const int M, const int C, const int H, const int W, const int K) {
+__global__ void forward_kernel(float * __restrict__ out, const float * __restrict__ x, const float * __restrict__ k, const int B, const int M, const int C, const int H, const int W, const int K) {
 
     /*
     Modify this function to implement the forward pass described in Chapter 16.
@@ -29,7 +29,7 @@ __global__ void forward_kernel(float * __restrict__ out, float * __restrict__ y,
     extern __shared__ float shmem[];
     float* X_shared = shmem;
 
-    const int H_out = H - K + 1;
+    //const int H_out = H - K + 1;
     const int W_out = W - K + 1;
     const int W_grid = ceil((1.0 * W_out) / TILE_SIZE);
 
@@ -40,7 +40,7 @@ __global__ void forward_kernel(float * __restrict__ out, float * __restrict__ y,
     #define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
     #define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
     #define k4d(i3, i2, i1, i0) Mask[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
-    #define o4d(i3, i2, i1) out[(i3)*(C*K) + (i2) * (K) + (i1)] //For the reduction array outputted
+    #define o4d(i2, i1, i0) out[(i2)*(C*K) + (i1) * (K) + (i0)] //For the reduction array outputted
 
     int n, m, h, w, c, p, q;
     int tile_width = TILE_SIZE + K - 1;
@@ -74,7 +74,7 @@ __global__ void forward_kernel(float * __restrict__ out, float * __restrict__ y,
                 o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 4] * k4d(m, c, p, q + 4);
             }
             for (q = (K - (K % 5)); q < K; q += 5) {
-                o4d(c, p, q) = = acc + X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q] * k4d(m, c, p, q);
+                o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q] * k4d(m, c, p, q);
             }
         }
     }
@@ -85,6 +85,39 @@ __global__ void forward_kernel(float * __restrict__ out, float * __restrict__ y,
     #undef o4d
 }
 
+__global__ void reduction_kernel(float * __restrict__ input, float * __restrict__ y, const int B, const int M, const int C, const int H, const int W, const int K) 
+{
+
+	__shared__ float sumArr[2*RBLOCK_SIZE];	// Size may need to change?
+	    
+	#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
+	#define o4d(i2, i1, i0) out[(i2)*(C*K) + (i1) * (K) + (i0)] //For the reduction array outputted
+
+	unsigned int tx = threadIdx.x; //int ty = threadIdx.y; int tz = threadIdx.z;
+	unsigned int start = 2*blockIdx.x*blockDim.x; //Start at the last thread of each even block.
+
+	for (int i = 0; i <= 1; i++)
+	{
+		int idx = tx + start + i*RBLOCK_SIZE;
+		if (idx < C*K*K)
+			sumArr[tx + i*RBLOCK_SIZE] = input[idx];
+		else
+			sumArr[tx + i*RBLOCK_SIZE] = 0;
+	}
+
+	for (unsigned int stride = blockDim.x; stride >= 1; stride >>= 1)
+	{
+		__syncthreads();
+		if (tx < stride)
+			sumArr[tx] += sumArr[tx+stride];
+	}
+
+	y[blockIdx.x] = sumArr[0];
+
+	#undef y4d
+	#undef o4d
+
+}
 /* 
    This function is called by new-inl.h
    Any code you write should be executed by this function.
@@ -112,7 +145,6 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     float* sumArray; 
     int sumSize = C*K*K * sizeof(float);
     cudaMalloc(&sumArray, sumSize);
-	
 	/* For Constant Mem */
     cudaMemcpyToSymbol(Mask, w.dptr_, KERNEL_SIZE * KERNEL_SIZE * M * C * sizeof(float), 0, cudaMemcpyDeviceToDevice);
     size_t shmem_size = ((TILE_SIZE + K-1) * (TILE_SIZE + K-1)) * sizeof(float);
@@ -125,10 +157,12 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 
     //Call the kernel
     forward_kernel<<<gridDim, blockDim, shmem_size>>>(sumArray, x.dptr_, w.dptr_, B, M, C, H, W, K);
-
-    dim3 rgridDim(ceil((1.0)*C*K*K/RBLOCK_SIZE), 1, 1);
+    
+    dim3 rgridDim(ceil((1.0)*C*K*K/RBLOCK_SIZE), ceil((1.0)*K/RBLOCK_SIZE), ceil((1.0)*K/RBLOCK_SIZE));
     dim3 rblockDim(RBLOCK_SIZE, 1, 1);
-    reduction_kernel<<<gridDim, blockDim, shmem_size>>>(
+    reduction_kernel<<<rgridDim, rblockDim>>>(sumArray, y.dptr_, B, M, C, H, W, K);
+
+    cudaFree(sumArray);
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 }
@@ -144,5 +178,6 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
 }
 }
 }
+
 
 #endif
