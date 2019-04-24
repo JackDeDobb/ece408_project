@@ -13,7 +13,7 @@ namespace op
 #define TILE_SIZE 16
 #define KERNEL_SIZE 5
 #define MASK_WIDTH 24 * 12 * 7 * 7
-#define RBLOCK_SIZE 128
+#define RBLOCK_SIZE 128 // Subject to change
 
 __constant__ float Mask [MASK_WIDTH];
 
@@ -40,7 +40,7 @@ __global__ void forward_kernel(float * __restrict__ out, const float * __restric
     #define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
     #define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
     #define k4d(i3, i2, i1, i0) Mask[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
-    #define o4d(i2, i1, i0) out[(i2)*(C*K) + (i1) * (K) + (i0)] //For the reduction array outputted
+    #define o4d(i2, i1, i0) out[(i2)*(K*K) + (i1) * (K) + (i0)] //For the reduction array outputted
 
     int n, m, h, w, c, p, q;
     int tile_width = TILE_SIZE + K - 1;
@@ -49,7 +49,6 @@ __global__ void forward_kernel(float * __restrict__ out, const float * __restric
     m = blockIdx.y;
     h = (blockIdx.z / W_grid) * TILE_SIZE + threadIdx.x;
     w = (blockIdx.z % W_grid) * TILE_SIZE + threadIdx.y;
-    
     bool stopLoop = false;
     for (c = 0; c < C; c++) {
         __syncthreads();
@@ -67,11 +66,11 @@ __global__ void forward_kernel(float * __restrict__ out, const float * __restric
         for (p = 0; p < K; p++) {
             #pragma unroll 25
             for (q = 0; q < (K - (K % 5)); q += 5) {
-                o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q] * k4d(m, c, p, q);
-                o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 1] * k4d(m, c, p, q + 1);
-                o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 2] * k4d(m, c, p, q + 2);
-                o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 3] * k4d(m, c, p, q + 3);
-                o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 4] * k4d(m, c, p, q + 4);
+		o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q] * k4d(m, c, p, q);
+                o4d(c, p, q + 1) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 1] * k4d(m, c, p, q + 1);
+                o4d(c, p, q + 2) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 2] * k4d(m, c, p, q + 2);
+                o4d(c, p, q + 3) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 3] * k4d(m, c, p, q + 3);
+                o4d(c, p, q + 4) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q + 4] * k4d(m, c, p, q + 4);
             }
             for (q = (K - (K % 5)); q < K; q += 5) {
                 o4d(c, p, q) = X_shared[(threadIdx.x + p) * tile_width + threadIdx.y + q] * k4d(m, c, p, q);
@@ -91,7 +90,7 @@ __global__ void reduction_kernel(float * __restrict__ input, float * __restrict_
 	__shared__ float sumArr[2*RBLOCK_SIZE];	// Size may need to change?
 	    
 	#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
-	#define o4d(i2, i1, i0) out[(i2)*(C*K) + (i1) * (K) + (i0)] //For the reduction array outputted
+	#define o4d(i2, i1, i0) out[(i2)*(K*K) + (i1) * (K) + (i0)] //For the reduction array outputted
 
 	unsigned int tx = threadIdx.x; //int ty = threadIdx.y; int tz = threadIdx.z;
 	unsigned int start = 2*blockIdx.x*blockDim.x; //Start at the last thread of each even block.
@@ -143,7 +142,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     
 	/* For Reduction */    
     float* sumArray; 
-    int sumSize = C*K*K * sizeof(float);
+    int sumSize = B*C*K*K * sizeof(float);
     cudaMalloc(&sumArray, sumSize);
 	/* For Constant Mem */
     cudaMemcpyToSymbol(Mask, w.dptr_, KERNEL_SIZE * KERNEL_SIZE * M * C * sizeof(float), 0, cudaMemcpyDeviceToDevice);
@@ -157,8 +156,8 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 
     //Call the kernel
     forward_kernel<<<gridDim, blockDim, shmem_size>>>(sumArray, x.dptr_, w.dptr_, B, M, C, H, W, K);
-    
-    dim3 rgridDim(ceil((1.0)*C*K*K/RBLOCK_SIZE), ceil((1.0)*K/RBLOCK_SIZE), ceil((1.0)*K/RBLOCK_SIZE));
+
+    dim3 rgridDim(ceil((1.0)*C*K*K/RBLOCK_SIZE), 1,1);//ceil((1.0)*K/RBLOCK_SIZE), ceil((1.0)*K/RBLOCK_SIZE));
     dim3 rblockDim(RBLOCK_SIZE, 1, 1);
     reduction_kernel<<<rgridDim, rblockDim>>>(sumArray, y.dptr_, B, M, C, H, W, K);
 
