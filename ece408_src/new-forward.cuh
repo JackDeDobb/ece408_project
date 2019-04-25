@@ -49,16 +49,15 @@ __global__ void forward_kernel(float * __restrict__ y, const float * __restrict_
     
     float acc = 0.0;
     bool stopLoop = false;
+    int firstStop;
+    int secondStop;
     for (c = 0; c < C; c++) {
         __syncthreads();
-        for (int i = h; i < h + tile_width - threadIdx.x; i += TILE_SIZE) {
-            if (stopLoop) { break; }
-            for (int j = w; j < w + tile_width - threadIdx.y; j += TILE_SIZE) {
-                if (i == H) { stopLoop = true; break; }
-                if (j == W) { break; }
-                if (i < H && j < W) {
-                    X_shared[(i - h + threadIdx.x) * tile_width + j - w + threadIdx.y] = x4d(n, c, i, j);
-                }
+        firstStop = min(h + tile_width - threadIdx.x, H);
+        for (int i = h; i < firstStop; i += TILE_SIZE) {
+            secondStop = min(w + tile_width - threadIdx.y, W);
+            for (int j = w; j < secondStop; j += TILE_SIZE) {
+                X_shared[(i - h + threadIdx.x) * tile_width + j - w + threadIdx.y] = x4d(n, c, i, j);
             }
         }
         __syncthreads();
