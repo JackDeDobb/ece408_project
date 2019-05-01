@@ -13,22 +13,22 @@ namespace op
 
 #define TILE_WIDTH 32
 
-__global__ void matrixMultiplyShared(float *A, float *B, float *C, int b, 
+__global__ void matrixMultiplyShared(float *A, float *B, float *C, int b,
                                      int numARows, int numAColumns,
                                      int numBRows, int numBColumns,
                                      int numCRows, int numCColumns) {
 
   __shared__ float TileM[TILE_WIDTH][TILE_WIDTH];
   __shared__ float TileN[TILE_WIDTH][TILE_WIDTH];
-  
+
   int tx = threadIdx.x; int ty = threadIdx.y;
   int bx = blockIdx.x; int by = blockIdx.y;
-  
+
   int r = by*TILE_WIDTH+ty; int c = bx*TILE_WIDTH+tx;
 
   int offset = b*numCRows*numCColumns;
   //int offset = 0;
-  
+
   float pv = 0;
   for (int m=0; m<ceil(numAColumns/(1.0*TILE_WIDTH));m++){
     int row = m*TILE_WIDTH+threadIdx.y;
@@ -44,7 +44,7 @@ __global__ void matrixMultiplyShared(float *A, float *B, float *C, int b,
         TileN[ty][tx] = B[row*numBColumns+c];
     else
         TileN[ty][tx] = 0.0;
-    
+
     __syncthreads();
     for (int k=0;k<TILE_WIDTH;k++){
       pv += TileM[ty][k]*TileN[k][tx];
@@ -54,18 +54,18 @@ __global__ void matrixMultiplyShared(float *A, float *B, float *C, int b,
   }
 
   if ((r < numCRows) && (c < numCColumns))
-    C[offset + r*numCColumns+c] = pv;  
-  
+    C[offset + r*numCColumns+c] = pv;
+
 }
 
 __global__ void unroll_Kernel(float* x, float* x_unroll, int b, int C, int H, int W, int K){
     int idx = blockDim.x*blockIdx.x+threadIdx.x;
-    
+
     int H_out = H-K+1;
     int W_out = W-K+1;
 
     if (idx < C*K*K*H_out*W_out){
-    
+
         int row = idx / (H_out*W_out);
         int col = idx % (H_out*W_out);
 
@@ -78,7 +78,7 @@ __global__ void unroll_Kernel(float* x, float* x_unroll, int b, int C, int H, in
 }
 
 
-/* 
+/*
    This function is called by new-inl.h
    Any code you write should be executed by this function.
    For ECE408, we only expect the float version of the operator to be called, so here we specialize with only floats.
@@ -107,11 +107,13 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     cudaMalloc(&x_unrolled, sizeof(float)*unrolled_size);
     //int b = B;
 
+
+    dim3 gridDim (ceil(H_out*W_out/(1.0*TILE_WIDTH)), ceil(M/(1.0*TILE_WIDTH)));
+    dim3 blockDim(TILE_WIDTH, TILE_WIDTH);
+
+    
     for (int b = B; b--; ) {
         unroll_Kernel<<<ceil(unrolled_size/(1.0*BLOCK_WIDTH)), BLOCK_WIDTH>>>(x.dptr_, x_unrolled, b, C, H, W, K);
-
-        dim3 gridDim (ceil(H_out*W_out/(1.0*TILE_WIDTH)), ceil(M/(1.0*TILE_WIDTH)));
-        dim3 blockDim(TILE_WIDTH, TILE_WIDTH);
 
         matrixMultiplyShared<<<gridDim, blockDim>>>(w.dptr_, x_unrolled, y.dptr_, b, K ,C*K*K, C*K*K, H_out*W_out ,M, H_out*W_out);
 
@@ -124,7 +126,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 }
 
-/* 
+/*
     This tells mxnet how to do an op when it's not a float.
     This is not used in the ECE408 project
 */
