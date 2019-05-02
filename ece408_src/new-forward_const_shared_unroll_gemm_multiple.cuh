@@ -165,8 +165,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     const int H_out = H - K + 1;
     const int W_out = W - K + 1;
 
-
-    if (false) {
+    if (B >= 1000 || B * M * C > 10000) {
 
       cudaMemcpyToSymbol(Mask, w.dptr_, KERNEL_SIZE * KERNEL_SIZE * M * C * sizeof(float), 0, cudaMemcpyDeviceToDevice);
       size_t shmem_size = ((TILE_SIZE + K-1) * (TILE_SIZE + K-1)) * sizeof(float);
@@ -193,6 +192,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
           matrixMultiplyShared<<<gridDim, blockDim>>>(w.dptr_, x_unrolled, y.dptr_, b, K ,C*K*K, C*K*K, H_out*W_out ,M, H_out*W_out);
       }
       cudaFree(x_unrolled);
+
     }
 
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
